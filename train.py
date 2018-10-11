@@ -5,6 +5,7 @@ import coloredlogs
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 
 from tqdm import tqdm
@@ -18,55 +19,42 @@ EOS_TOKEN = '^'
 
 @click.command()
 @click.option(
-    '-f',
-    '--filename',
-    default='data/names',
-    type=click.Path(exists=True),
-    help='path for the training data file'
+    '-f', '--filename', default='data/names',
+    type=click.Path(exists=True), help='path for the training data file'
 )
 @click.option(
-    '-es',
-    '--emb-size',
-    default=32,
+    '-es', '--emb-size', default=32,
     help='size of the each embedding'
 )
 @click.option(
-    '-hs',
-    '--hidden-size',
-    default=128,
+    '-hs', '--hidden-size', default=128,
     help='number of hidden RNN units'
 )
 @click.option(
-    '-n',
-    '--num-epochs',
-    default=50,
+    '-n', '--num-epochs', default=50,
     help='number of epochs for training'
 )
 @click.option(
-    '-bz',
-    '--batch-size',
-    default=16,
+    '-bz', '--batch-size', default=16,
     help='number of samples per mini-batch'
 )
 @click.option(
-    '-lr',
-    '--learning-rate',
-    default=0.0001,
+    '-lr', '--learning-rate', default=0.0001,
     help='learning rate for the adam optimizer'
 )
 @click.option(
-    '-se',
-    '--save-every',
-    default=10,
+    '-se', '--save-every', default=10,
     help='epoch interval for saving the model'
 )
 @click.option(
-    '-sa',
-    '--sample-every',
-    default=20,
+    '-sa', '--sample-every', default=5,
     help='epoch interval for sampling new sequences'
 )
 def train(filename, emb_size, hidden_size, num_epochs, batch_size, learning_rate, save_every, sample_every):
+    """ Trains a character-level Recurrent Neural Network in PyTorch.
+
+    Args: optional arguments [python train.py --help]
+    """
     logging.info('reading `{}` for character sequences'.format(filename))
     inputs, token_to_idx, idx_to_token = load_dataset(file_name=filename)
     
@@ -80,12 +68,15 @@ def train(filename, emb_size, hidden_size, num_epochs, batch_size, learning_rate
     model.cuda()
     
     criterion = nn.NLLLoss(reduction='elementwise_mean')
-    optim = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', min_lr=1e-6, 
+                                                    factor=0.1, patience=7, verbose=True)
 
-    split_index_train = int(0.8 * inputs.size(0))
-    train_tensors, tensors = inputs[:-split_index_train], inputs[-split_index_train:]
-    split_index_val = int(0.9 * inputs.size(0))
-    val_tensors, test_tensors = inputs[split_index_train: split_index_val], inputs[split_index_val: ]
+    split_index = int(0.9 * inputs.size(0))
+    train_tensors, tensors = inputs[: split_index], inputs[split_index: ]
+    split_index = int(0.5 * tensors.size(0))
+    val_tensors, test_tensors = tensors[: split_index], tensors[split_index: ]
+    del inputs, tensors
     logging.info('train tensors: {}'.format(train_tensors.size()))
     logging.info('val tensors: {}'.format(val_tensors.size()))
     logging.info('test tensors: {}'.format(test_tensors.size()))
@@ -105,7 +96,7 @@ def train(filename, emb_size, hidden_size, num_epochs, batch_size, learning_rate
                 input_tensor = batch[:, t]
                 outputs[t] = model(input_tensor.cuda())
             targets = batch[:, 1: ].contiguous().view(-1)
-            epoch_loss += optimize(model, outputs, targets, n_tokens, criterion, optim)
+            epoch_loss += optimize(model, outputs, targets, n_tokens, criterion, optimizer)
             n_iter += 1
 
         outputs = torch.Tensor(max_length, val_tensors.size(0), n_tokens)
@@ -113,15 +104,16 @@ def train(filename, emb_size, hidden_size, num_epochs, batch_size, learning_rate
             input_tensor = val_tensors[:, t]
             outputs[t] = model(input_tensor.cuda())
         targets = val_tensors[:, 1: ].contiguous().view(-1)
-        val_loss = forward(model, outputs, targets, n_tokens, criterion)
+        val_loss = forward(model, outputs, targets, n_tokens, criterion).item()
+        scheduler.step(val_loss)
 
         logging.info('Epoch[{}/{}]: train_loss - {:.4f}   val_loss - {:.4f}'
-                    .format(epoch, num_epochs, epoch_loss / n_iter, val_loss.item()))
+                    .format(epoch, num_epochs, epoch_loss / n_iter, val_loss))
         
         # sample from the model every few epochs
         if epoch % sample_every == 0:
             for _ in range(10):
-                sample = generate_sample(model, token_to_idx, idx_to_token, inputs.size(1), seed_phrase='~')
+                sample = generate_sample(model, token_to_idx, idx_to_token, max_length, seed_phrase='~')
                 logging.debug(sample)
 
 def forward(model, outputs, targets, n_tokens, criterion):
@@ -131,16 +123,17 @@ def forward(model, outputs, targets, n_tokens, criterion):
     loss = criterion(outputs, targets)
     return loss
 
-def optimize(model, outputs, targets, n_tokens, criterion, optim):
+def optimize(model, outputs, targets, n_tokens, criterion, optimizer):
     loss = forward(model, outputs, targets, n_tokens, criterion)
     loss.backward()
-    optim.step()
+    optimizer.step()
     return loss.item()
 
 def generate_sample(model, token_to_idx, idx_to_token, max_length, seed_phrase=SOS_TOKEN):
     """ Generates samples using seed phrase.
     
-    This function generates text given a `seed_phrase` as initial states. Remember to include start_token in seed phrase.
+    This function generates text given a `seed_phrase` as initial states. 
+    Remember to include start_token in seed phrase.
     """
     x_sequence = [token_to_idx[token] for token in seed_phrase]
     
