@@ -9,10 +9,8 @@ class CharRNN(nn.Module):
 
     def __init__(self, n_tokens, emb_size, hidden_size, pad_id):
         super(CharRNN, self).__init__()
-        self.hidden_size = hidden_size
-
-        self.embedding = nn.Embedding(n_tokens, emb_size, padding_idx=pad_id)
         self.net = nn.Sequential(
+            nn.Embedding(n_tokens, emb_size, padding_idx=pad_id),
             nn.Linear(emb_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, n_tokens),
@@ -20,9 +18,6 @@ class CharRNN(nn.Module):
         )
         self.net.apply(init_weights)
 
-    def forward(self, inputs, hidden):
-        embedded = self.embedding(inputs)
-        inputs = torch.cat([embedded, hidden])
-        output = self.net.forward(inputs)
-        return output, hidden
+    def forward(self, inputs):
+        return self.net.forward(inputs)
         
