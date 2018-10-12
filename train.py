@@ -11,7 +11,7 @@ import numpy as np
 from tqdm import tqdm
 
 from utils import load_dataset, iterate_minibatches
-from model import BasicRNNCell, LSTMNetwork
+from model import CharRNN
 
 SOS_TOKEN = '~'
 PAD_TOKEN = '#'
@@ -20,41 +20,59 @@ EOS_TOKEN = '^'
 @click.command()
 @click.option(
     '-f', '--filename', default='data/names',
-    type=click.Path(exists=True), help='path for the training data file'
+    type=click.Path(exists=True), help='path for the training data file [data/names]'
 )
 @click.option(
-    '-rt', '--rnn-type', default='basic',
-    help='type of RNN layer to use'
+    '-rt', '--rnn-type', default='lstm',
+    help='type of RNN layer to use [LSTM]'
+)
+@click.option(
+    '-nl', '--num-layers', default=2,
+    help='number of layers in RNN [2]'
+)
+@click.option(
+    '-dr', '--dropout', default=0.5,
+    help='dropout value for RNN layers [0.5]'
 )
 @click.option(
     '-es', '--emb-size', default=64,
-    help='size of the each embedding'
+    help='size of the each embedding [64]'
 )
 @click.option(
     '-hs', '--hidden-size', default=256,
-    help='number of hidden RNN units'
+    help='number of hidden RNN units [256]'
 )
 @click.option(
     '-n', '--num-epochs', default=50,
-    help='number of epochs for training'
+    help='number of epochs for training [50]'
 )
 @click.option(
     '-bz', '--batch-size', default=32,
-    help='number of samples per mini-batch'
+    help='number of samples per mini-batch [32]'
 )
 @click.option(
-    '-lr', '--learning-rate', default=0.001,
-    help='learning rate for the adam optimizer'
+    '-lr', '--learning-rate', default=0.0002,
+    help='learning rate for the adam optimizer [0.0002]'
 )
 @click.option(
     '-se', '--save-every', default=10,
-    help='epoch interval for saving the model'
+    help='epoch interval for saving the model [10]'
+)
+@click.option(
+    '-ns', '--num-samples', default=5,
+    help='number of samples to generate after epoch interval [5]'
+)
+@click.option(
+    '-sp', '--seed-phrase', default=SOS_TOKEN,
+    help='seed phrase to feed the RNN for sampling [SOS_TOKEN]'
 )
 @click.option(
     '-sa', '--sample-every', default=5,
-    help='epoch interval for sampling new sequences'
+    help='epoch interval for sampling new sequences [5]'
 )
-def train(filename, rnn_type, emb_size, hidden_size, num_epochs, batch_size, learning_rate, save_every, sample_every):
+def train(filename, rnn_type, num_layers, dropout, emb_size, 
+        hidden_size, num_epochs, batch_size, learning_rate, 
+        save_every, num_samples, seed_phrase, sample_every):
     """ Trains a character-level Recurrent Neural Network in PyTorch.
 
     Args: optional arguments [python train.py --help]
@@ -66,19 +84,12 @@ def train(filename, rnn_type, emb_size, hidden_size, num_epochs, batch_size, lea
     max_length = inputs.size(1)
     
     logging.debug('creating char-level RNN model')
-    if rnn_type == 'basic':
-        model = BasicRNNCell(dropout=0.5, n_tokens=n_tokens, emb_size=emb_size, 
-                            hidden_size=hidden_size, pad_id=token_to_idx[PAD_TOKEN])
-    elif rnn_type == 'gru':
-        pass
-    elif rnn_type == 'lstm':
-        model = LSTMNetwork(num_layers=2, dropout=0.5, n_tokens=n_tokens, 
-                            emb_size=emb_size, hidden_size=hidden_size, 
-                            pad_id=token_to_idx[PAD_TOKEN])
-    else:
-        raise UserWarning('unknown RNN type.')
+    model = CharRNN(num_layers=num_layers, rnn_type=rnn_type, 
+                    dropout=dropout, n_tokens=n_tokens,
+                    emb_size=emb_size, hidden_size=hidden_size, 
+                    pad_id=token_to_idx[PAD_TOKEN])
     if torch.cuda.is_available():
-        model.cuda()
+        model = model.cuda()
     
     logging.debug('defining model training operations')
     # define training procedures and operations for training the model
@@ -89,24 +100,24 @@ def train(filename, rnn_type, emb_size, hidden_size, num_epochs, batch_size, lea
 
     # train-val-test split of the dataset
     split_index = int(0.9 * inputs.size(0))
-    train_tensors, tensors = inputs[: split_index], inputs[split_index: ]
-    split_index = int(0.5 * tensors.size(0))
-    val_tensors, test_tensors = tensors[: split_index], tensors[split_index: ]
-    del inputs, tensors
+    train_tensors, inputs = inputs[: split_index], inputs[split_index: ]
+    split_index = int(0.5 * inputs.size(0))
+    val_tensors, test_tensors = inputs[: split_index], inputs[split_index: ]
+    del inputs
     logging.info('train tensors: {}'.format(train_tensors.size()))
     logging.info('val tensors: {}'.format(val_tensors.size()))
     logging.info('test tensors: {}'.format(test_tensors.size()))
-    
+
     logging.debug('training char-level RNN model')
     # loop over epochs
     for epoch in range(1, num_epochs + 1):
         epoch_loss, n_iter = 0.0, 0
         # loop over batches
-        for batch in tqdm(iterate_minibatches(train_tensors, batchsize=batch_size),
+        for tensors in tqdm(iterate_minibatches(train_tensors, batchsize=batch_size),
                         desc='Epoch[{}/{}]'.format(epoch, num_epochs), leave=False,
                         total=train_tensors.size(0) // batch_size):
             # optimize model parameters
-            epoch_loss += optimize(model, batch, max_length, n_tokens, criterion, optimizer)
+            epoch_loss += optimize(model, tensors, max_length, n_tokens, criterion, optimizer)
             n_iter += 1
         # evaluate model after every epoch
         val_loss = evaluate(model, val_tensors, max_length, n_tokens, criterion)
@@ -118,8 +129,9 @@ def train(filename, rnn_type, emb_size, hidden_size, num_epochs, batch_size, lea
         
         # sample from the model every few epochs
         if epoch % sample_every == 0:
-            for _ in range(10):
-                sample = generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens)
+            for _ in range(num_samples):
+                sample = generate_sample(model, token_to_idx, idx_to_token, 
+                                        max_length, n_tokens, seed_phrase=seed_phrase)
                 logging.debug(sample)
 
 def optimize(model, inputs, max_length, n_tokens, criterion, optimizer):
@@ -133,6 +145,7 @@ def optimize(model, inputs, max_length, n_tokens, criterion, optimizer):
     loss = criterion(outputs, targets)
     # backpropagate error
     loss.backward()
+    _ = torch.nn.utils.clip_grad_norm_(model.parameters(), 50.0)
     # update model parameters
     optimizer.step()
     return loss.item()
@@ -149,15 +162,20 @@ def evaluate(model, inputs, max_length, n_tokens, criterion):
     return loss.item()
 
 def forward(model, inputs, max_length, n_tokens):
+    hidden = model.initHidden(inputs.size(0))
     if torch.cuda.is_available():
-        inputs.cuda()
+        inputs = inputs.cuda()
+        if type(hidden) == tuple:
+            hidden = tuple([x.cuda() for x in hidden])
+        else:
+            hidden = hidden.cuda()
     # tensor for storing outputs of each time-step
     outputs = torch.Tensor(max_length, inputs.size(0), n_tokens)
     # loop over time-steps
     for t in range(max_length):
         # t-th time-step input
         input_t = inputs[:, t]
-        outputs[t] = model(input_t.cuda())
+        outputs[t], hidden = model(input_t, hidden)
     # (timesteps, batches, n_tokens) -> (batches, timesteps, n_tokens)
     outputs = outputs.permute(1, 0, 2)
     # ignore the last time-step since we don't have a target for it.
@@ -185,11 +203,18 @@ def generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens, see
     # convert to token ids for model
     sequence = [token_to_idx[token] for token in seed_phrase]
     input_tensor = torch.LongTensor(sequence)
+
+    hidden = model.initHidden(1)
     if torch.cuda.is_available():
-        input_tensor.cuda()
+        input_tensor = input_tensor.cuda()
+        if type(hidden) == tuple:
+            hidden = tuple([x.cuda() for x in hidden])
+        else:
+            hidden = hidden.cuda()
+
     # feed the seed phrase to manipulate rnn hidden states
-    for i in range(len(sequence) - 1):
-        model(input_tensor[i])
+    for t in range(len(sequence) - 1):
+        _, hidden = model(input_tensor[t], hidden)
     
     # start generating
     for _ in range(max_length - len(seed_phrase)):
@@ -197,15 +222,17 @@ def generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens, see
         input_tensor = torch.LongTensor([sequence[-1]])
         if torch.cuda.is_available():
             input_tensor = input_tensor.cuda()
-        probs = model(input_tensor)
+        probs, hidden = model(input_tensor, hidden)
+
         # need to use `exp` as output is `LogSoftmax`
         probs = list(np.exp(np.array(probs.data[0])))
         # normalize probabilities to ensure sum = 1
         probs /= sum(probs)
         # sample char randomly based on probabilities
         sequence.append(np.random.choice(len(idx_to_token), p=probs))
+    # format the string to ignore `pad_token` and `start_token` and return
     return str(''.join([idx_to_token[ix] for ix in sequence 
-                    if idx_to_token[ix] != PAD_TOKEN and idx_to_token[ix] != SOS_TOKEN])).capitalize()
+                if idx_to_token[ix] != PAD_TOKEN and idx_to_token[ix] != SOS_TOKEN])).capitalize()
 
 def main():
     coloredlogs.install(level='DEBUG')
