@@ -19,16 +19,13 @@ class CharRNN(nn.Module):
 
     This module imitates the basic structure and flow of an 
     RNN with embeddings, hidden states and output softmax.
-    Alternatively you can use `LSTM` and `GRU` recurrent models.
+    Alternatively you can use `LSTM` and `GRU` recurrent modules.
 
     Args:
         n_tokens (int): number of unique tokens in corpus.
         emb_size (int): dimensionality of each embedding.
         hidden_size (int): number of hidden units in RNN hidden layer.
         pad_id (int): token_id of the padding token.
-
-    Attributes:
-        
     """
 
     def __init__(self, num_layers, rnn_type, n_tokens, emb_size, hidden_size, dropout, pad_id):

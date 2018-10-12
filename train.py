@@ -15,7 +15,6 @@ from model import CharRNN
 
 SOS_TOKEN = '~'
 PAD_TOKEN = '#'
-EOS_TOKEN = '^'
 
 @click.command()
 @click.option(
@@ -55,10 +54,6 @@ EOS_TOKEN = '^'
     help='learning rate for the adam optimizer [0.001]'
 )
 @click.option(
-    '-se', '--save-every', default=10,
-    help='epoch interval for saving the model [10]'
-)
-@click.option(
     '-ns', '--num-samples', default=5,
     help='number of samples to generate after epoch interval [5]'
 )
@@ -72,7 +67,7 @@ EOS_TOKEN = '^'
 )
 def train(filename, rnn_type, num_layers, dropout, emb_size, 
         hidden_size, num_epochs, batch_size, learning_rate, 
-        save_every, num_samples, seed_phrase, sample_every):
+        num_samples, seed_phrase, sample_every):
     """ Trains a character-level Recurrent Neural Network in PyTorch.
 
     Args: optional arguments [python train.py --help]

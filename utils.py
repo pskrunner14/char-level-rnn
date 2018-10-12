@@ -6,7 +6,6 @@ import numpy as np
 
 SOS_TOKEN = '~'
 PAD_TOKEN = '#'
-EOS_TOKEN = '^'
 
 def sequences_to_tensors(sequences, token_to_idx):
     """ Casts a list of sequences into rnn-digestable padded tensor """
