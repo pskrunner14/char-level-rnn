@@ -35,8 +35,8 @@ EOS_TOKEN = '^'
     help='dropout value for RNN layers [0.5]'
 )
 @click.option(
-    '-es', '--emb-size', default=64,
-    help='size of the each embedding [64]'
+    '-es', '--emb-size', default=50,
+    help='size of the each embedding [50]'
 )
 @click.option(
     '-hs', '--hidden-size', default=256,
@@ -51,8 +51,8 @@ EOS_TOKEN = '^'
     help='number of samples per mini-batch [32]'
 )
 @click.option(
-    '-lr', '--learning-rate', default=0.0002,
-    help='learning rate for the adam optimizer [0.0002]'
+    '-lr', '--learning-rate', default=0.001,
+    help='learning rate for the adam optimizer [0.001]'
 )
 @click.option(
     '-se', '--save-every', default=10,
@@ -136,6 +136,7 @@ def train(filename, rnn_type, num_layers, dropout, emb_size,
 
 def optimize(model, inputs, max_length, n_tokens, criterion, optimizer):
     model.train()
+    optimizer.zero_grad()
     # compute outputs after one forward pass
     outputs = forward(model, inputs, max_length, n_tokens)
     # ignore the first timestep since we don't have prev input for it
@@ -199,10 +200,14 @@ def generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens, see
     """
     model.eval()
     if seed_phrase[0] != SOS_TOKEN:
-        seed_phrase = SOS_TOKEN + seed_phrase
-    # convert to token ids for model
-    sequence = [token_to_idx[token] for token in seed_phrase]
-    input_tensor = torch.LongTensor(sequence)
+        seed_phrase = SOS_TOKEN + seed_phrase.lower()
+    try:
+        # convert to token ids for model
+        sequence = [token_to_idx[token] for token in seed_phrase]
+    except KeyError as e:
+        logging.error('unknown token: {}'.format(e))
+        exit(0)
+    input_tensor = torch.LongTensor([sequence])
 
     hidden = model.initHidden(1)
     if torch.cuda.is_available():
@@ -214,7 +219,7 @@ def generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens, see
 
     # feed the seed phrase to manipulate rnn hidden states
     for t in range(len(sequence) - 1):
-        _, hidden = model(input_tensor[t], hidden)
+        _, hidden = model(input_tensor[:, t], hidden)
     
     # start generating
     for _ in range(max_length - len(seed_phrase)):
