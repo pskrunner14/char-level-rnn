@@ -88,7 +88,7 @@ def train(filename, rnn_type, num_layers, dropout, emb_size,
     
     logging.debug('defining model training operations')
     # define training procedures and operations for training the model
-    criterion = nn.NLLLoss(reduction='elementwise_mean')
+    criterion = nn.NLLLoss(reduction='mean')
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', min_lr=1e-6, 
                                                     factor=0.1, patience=7, verbose=True)
@@ -225,7 +225,7 @@ def generate_sample(model, token_to_idx, idx_to_token, max_length, n_tokens, see
         probs, hidden = model(input_tensor, hidden)
 
         # need to use `exp` as output is `LogSoftmax`
-        probs = list(np.exp(np.array(probs.data[0])))
+        probs = list(np.exp(np.array(probs.data[0].cpu())))
         # normalize probabilities to ensure sum = 1
         probs /= sum(probs)
         # sample char randomly based on probabilities
